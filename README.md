@@ -24,3 +24,6 @@ consumes this repository as a git submodule.
 3. Write the body: Summary, Impact, Root Cause, Timeline, Resolution,
    Follow-up Actions, Lessons Learned.
 4. Keep `status: "draft"` until reviewed; flip to `"published"` afterwards.
+   When the incident is fully closed (follow-ups tracked, fix verified in
+   prod), set `status: "resolved"` — the postmortem stays on the site with a
+   resolved marker.
