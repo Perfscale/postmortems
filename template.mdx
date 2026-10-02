@@ -1,0 +1,89 @@
+---
+title: "Postmortem: [Incident Title]"
+date: "YYYY-MM-DD"
+severity: "critical | high | medium | low"
+status: "draft | published"
+authors: []
+reviewers: []
+incident_start: "YYYY-MM-DD HH:MM UTC"
+incident_end: "YYYY-MM-DD HH:MM UTC"
+downtime_duration: "X minutes"
+affected_services: []
+---
+
+# Postmortem: [Incident Title]
+
+## Summary
+
+Brief description of what happened (2-3 sentences max).
+
+**Severity**: {frontmatter.severity}
+**Duration**: {frontmatter.downtime_duration}
+**Impact**: X users affected, Y% error rate
+
+## Impact
+
+- **Services affected**: {frontmatter.affected_services.join(', ')}
+- **User impact**: Description of how users were affected
+- **Business impact**: Revenue loss, SLA breach, etc.
+- **Detection time**: X minutes (from start to detection)
+
+## Root Cause
+
+Detailed explanation of the underlying cause(s). What chain of events led to the incident?
+
+### Contributing Factors
+
+- Factor 1
+- Factor 2
+
+## Timeline (UTC)
+
+| Time | Event |
+|------|-------|
+| HH:MM | Incident detected / alert fired |
+| HH:MM | Engineer acknowledged the alert |
+| HH:MM | Investigation started |
+| HH:MM | Root cause identified |
+| HH:MM | Fix deployed / mitigation applied |
+| HH:MM | Service restored |
+| HH:MM | Incident declared closed |
+
+## Resolution
+
+What was done to resolve the incident? Include:
+- Immediate mitigation steps
+- Permanent fix applied
+- Verification steps
+
+## Follow-up Actions
+
+| Action Item | Owner | Priority | Due Date | Status |
+|-------------|-------|----------|----------|--------|
+| [Description of action] | @owner | P0/P1/P2 | YYYY-MM-DD | open/in-progress/done |
+| | | | | |
+
+## Lessons Learned
+
+### What Went Well
+
+- Positive aspect 1
+- Positive aspect 2
+
+### What Went Wrong
+
+- Issue 1
+- Issue 2
+
+### Where We Got Lucky
+
+- Lucky break 1 (things that could have made it worse)
+
+## Action Items Status
+
+- [ ] Action item 1
+- [ ] Action item 2
+
+---
+
+*This postmortem follows the PerfScale incident response process. For questions, contact the SRE team.*
