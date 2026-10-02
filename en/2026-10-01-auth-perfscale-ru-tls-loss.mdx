@@ -1,0 +1,146 @@
+---
+title: "Postmortem: TLS certificate loss on auth.perfscale.ru after Nginx Proxy Manager recreate"
+date: "2026-10-02"
+severity: "high"
+status: "draft"
+authors: ["@vitaliharadkou"]
+reviewers: []
+incident_start: "2026-10-01 09:45 UTC"
+incident_end: "2026-10-02 07:07 UTC"
+downtime_duration: "~21.5 hours"
+affected_services: ["auth.perfscale.ru (Keycloak)", "app.perfscale.ru (login)", "controlplane .ru"]
+---
+
+# Postmortem: TLS certificate loss on auth.perfscale.ru after Nginx Proxy Manager recreate
+
+## Summary
+
+While enabling HTTP/3, the Nginx Proxy Manager (NPM) container on the ru VPS
+was recreated. During the recreate, NPM's `database.sqlite` was replaced by a
+fresh empty file: the Let's Encrypt certificate binding for the
+`auth.perfscale.ru` proxy host was lost, and the host started serving an old
+custom certificate (`CN=www.perfscale.ru`, no auth in SAN). Client TLS
+validation failed, and logins to the .ru control plane were broken for
+~21.5 hours.
+
+**Severity**: high
+**Duration**: ~21.5 hours (2026-10-01 09:45 UTC → 2026-10-02 07:07 UTC)
+**Impact**: new logins on .ru impossible; active sessions and the sites themselves unaffected
+
+## Impact
+
+- **Services affected**: auth.perfscale.ru (Keycloak), login on
+  app.perfscale.ru / controlplane .ru
+- **User impact**: users could not log in on the .ru domain — browsers aborted
+  the TLS handshake (`no alternative certificate subject name matches target
+  host name 'auth.perfscale.ru'`). Existing sessions kept working, and
+  perfscale.ru / app pages served normally
+- **Business impact**: degraded sign-in to the product on the primary domain;
+  no data loss
+- **Detection time**: ~5-6 hours (incident from 09:45 UTC, found during manual
+  post-deploy checks the same day; there is no certificate-validity alerting)
+
+## Root Cause
+
+1. HTTP/3 required publishing `443/udp`, so the NPM container was recreated
+   (`docker compose up -d --force-recreate` or equivalent).
+2. After the recreate, the NPM backend hung on startup (IP Ranges fetch →
+   admin API 502, unhealthy); fixed with `docker restart`.
+3. Meanwhile `database.sqlite` in the `/data` volume turned out to be a fresh
+   file created at 09:45 UTC. The proxy host configuration in the DB survived
+   (was restored/matched), but the Let's Encrypt directory and the certificate
+   binding for `auth.perfscale.ru` did not. Why the old file/volume was absent
+   at startup is **undetermined** (volume mapping not yet investigated).
+4. In this state NPM fell back to serving the only available custom
+   certificate npm-6/7 (`CN=www.perfscale.ru`, SAN: www/autodiscover/mail/
+   owa/perfscale.ru — "Exchange-style"), which does not cover
+   auth.perfscale.ru.
+
+### Contributing Factors
+
+- NPM state (sqlite + `/data/letsencrypt`) lives in a single volume with no
+  backups; container recreate is a manual operation without a checklist.
+- No TLS certificate validity monitoring (blackbox probe) — detection was
+  manual only.
+- NPM's default email `admin@example.com` — Let's Encrypt refuses to register
+  an ACME account for example.com, which blocked the first reissue attempt
+  (HTTP 500 from the NPM UI) and added delay.
+- The presence of a "similar-looking" custom certificate npm-6 created a false
+  repair path (selecting it manually instead of issuing a new LE cert).
+
+## Timeline (UTC)
+
+| Time | Event |
+|------|-------|
+| 10-01 09:45 | NPM recreated for `443/udp` (HTTP/3 work); `database.sqlite` rewritten, LE cert binding for auth.perfscale.ru lost |
+| 10-01 ~15:00 | Discovered during checks: auth.perfscale.ru serves custom cert npm-6, TLS verify fails → .ru login broken |
+| 10-01 evening | Diagnosis: LE directory empty in NPM, no certificate binding in DB; plan — issue a new LE cert via NPM UI |
+| 10-02 ~07:01 | "Request a new SSL Certificate" attempts fail with HTTP 500: ACME rejects registration for `admin@example.com` |
+| 10-02 ~07:05 | Cause found in NPM logs; real email entered in the issuance dialog |
+| 10-02 07:07 | LE cert issued (`CN=auth.perfscale.ru`, issuer YE1), Force SSL enabled |
+| 10-02 07:10 | Verified: `https://auth.perfscale.ru/` → 200, realm openid-configuration → 200. Incident closed |
+
+## Resolution
+
+- **Immediate mitigation**: issued a new Let's Encrypt certificate for
+  auth.perfscale.ru via the NPM UI (Proxy Hosts → auth.perfscale.ru → SSL →
+  Request a new SSL Certificate → real email → Force SSL). The HTTP-01
+  challenge passed automatically (the host's port 80 was listening and
+  proxying).
+- **Permanent fix**: a valid LE certificate is in place; NPM auto-renewal is
+  expected to pick it up (verify within 30-90 days).
+- **Verification**: `curl https://auth.perfscale.ru/` → 200; LE chain valid;
+  `…/realms/perfscale/.well-known/openid-configuration` → 200; SAN contains
+  only auth.perfscale.ru.
+
+## Follow-up Actions
+
+| Action Item | Owner | Priority | Due Date | Status |
+|-------------|-------|----------|----------|--------|
+| TLS monitoring: blackbox probe for cert validity/expiry on auth/app/perfscale.ru with alerting | @vitaliharadkou | P0 | 2026-10-09 | open |
+| Rotate the NPM admin password (exposed in chat during reset) | @vitaliharadkou | P0 | 2026-10-02 | open |
+| Back up NPM `/data` (database.sqlite + letsencrypt) before any recreate; recreate checklist in the infra repo | @vitaliharadkou | P1 | 2026-10-09 | open |
+| Replace the default `admin@example.com` email in NPM (Users → Email) so ACME issuance does not fail | @vitaliharadkou | P1 | 2026-10-09 | open |
+| Investigate why `database.sqlite` was rewritten during recreate (volume mapping, compose) | @vitaliharadkou | P2 | 2026-10-16 | open |
+| Remove/triage the custom npm-6/7 certificates (Exchange-style) to eliminate the false fallback | @vitaliharadkou | P2 | 2026-10-16 | open |
+| Move NPM proxy host configuration (including the `listen 443 quic reuseport;` snippet) into IaC/infra docs | @vitaliharadkou | P2 | 2026-10-16 | open |
+
+## Lessons Learned
+
+### What Went Well
+
+- The HTTP-01 path was alive (port 80 proxied), so reissuing the certificate
+  took minutes once the email problem was fixed.
+- The proxy host configuration survived in the DB — routes did not need
+  rebuilding, only the certificate.
+- NPM logs quickly localized the 500 cause (ACME email).
+
+### What Went Wrong
+
+- A stateful container was recreated without a backup and without verifying
+  the volume — certificates were lost silently.
+- No TLS alerting: the login breakage was found by chance, hours later.
+- The default `admin@example.com` email blocked the first reissue attempt.
+- The "pick a similar-looking cert" attempt (npm-6) wasted time — its SAN
+  does not cover auth.perfscale.ru.
+
+### Where We Got Lucky
+
+- Only the auth host broke; the main site and gateway kept working.
+- Active user sessions were not invalidated — only new logins were affected.
+- The HTTP/3 config (the quic advanced_config) survived the recreate because
+  it lives in the same proxy hosts DB.
+
+## Action Items Status
+
+- [ ] TLS certificate monitoring (blackbox probe + alert)
+- [ ] NPM admin password rotation
+- [ ] NPM `/data` backup + recreate checklist
+- [ ] Real default email in NPM
+- [ ] Investigation of the database.sqlite rewrite
+- [ ] Cleanup of custom npm-6/7 certificates
+- [ ] NPM configuration → IaC/infra docs
+
+---
+
+*This postmortem follows the PerfScale incident response process. For questions, contact the SRE team.*
